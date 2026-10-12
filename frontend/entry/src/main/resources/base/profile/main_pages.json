@@ -1,0 +1,7 @@
+{
+  "src": [
+    "pages/Main",
+    "pages/Detail",
+    "pages/Index"
+  ]
+}

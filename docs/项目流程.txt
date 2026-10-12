@@ -1,0 +1,131 @@
+整个流程可以分成 3 大阶段：
+前端发请求 → 后端处理请求 → 前端展示结果
+第一阶段：用户在前端输入并发送请求（前端做的事）
+你写的前端页面（Index 组件）就像一个 “搜索框 + 展示板”，用户在这里操作：
+1. 用户输入药品名称
+页面上的TextInput组件就是输入框，用户输入的内容会实时同步到this.medName变量中（通过onChange事件）。比如用户输入 “感冒灵”，this.medName就变成了 “感冒灵”。
+2. 点击 “搜索” 按钮，前端发送请求给后端
+点击 “搜索” 按钮后，会触发onClick事件里的代码，核心是做一件事：把用户输入的药品名称发给后端，让后端去数据库找对应的药品。
+
+关键代码解析：
+
+typescript
+httpRequest.request(
+  "http://localhost:8082/med/selectMedByName?mname=" + mname, // 后端接收请求的地址
+  { method: http.RequestMethod.POST }, // 用POST方式发请求
+  (err, data) => { ... } // 后端返回结果后，前端如何处理
+)
+
+这里的地址http://localhost:8082/med/selectMedByName是后端 “接收搜索请求的窗口”（可以理解为后端的一个 “接收点”）。
+?mname=后面跟着的是用户输入的药品名称（比如 “感冒灵”），相当于告诉后端：“我要找叫‘感冒灵’的药品”。
+第二阶段：后端接收请求并处理（后端做的事）
+后端就像一个 “办事处”，有不同的 “工作人员” 分工处理请求，最终从数据库（相当于 “仓库”）里找到需要的药品。
+
+后端分了 3 层 “工作人员”，各司其职：
+1. 第一层：Controller（接待员）—— 接收请求
+对应代码：MedicineController类
+
+java
+@RequestMapping("/selectMedByName") // 对应前端请求的地址，专门处理这个地址的请求
+@ResponseBody
+public ResultMap selectMedByName(String mname) { // 接收前端传来的“药品名称”（mname）
+  try {
+    // 调用“业务处理员”（Service）去处理
+    List<Medicine> list = checkItemServiceI.selectMedByName(mname);
+    resultMap.setStatus(true); // 告诉前端：请求成功
+    resultMap.setList(list); // 把找到的药品列表放进去
+  } catch (Exception e) {
+    resultMap.setStatus(false); // 告诉前端：请求失败
+    resultMap.setMessage(e.getMessage()); // 失败原因（比如“无此药品”）
+  }
+  return resultMap; // 把结果打包返回给前端
+}
+
+作用：
+
+专门 “对接” 前端的请求（通过@RequestMapping绑定前端的请求地址）。
+拿到前端传来的 “药品名称”（mname）后，不自己处理，交给下一层（Service）。
+最终把处理结果打包成ResultMap（包含 “是否成功”“药品列表”“错误信息”）返回给前端。
+2. 第二层：Service（业务处理员）—— 处理核心逻辑
+对应代码：CheckItemServiceImpl类（实现了CheckItemServiceI接口）
+
+java
+public List<Medicine> selectMedByName(String mname) {
+  // 第一步：检查用户输入是否为空（比如用户没输入就点了搜索）
+  if (mname.isEmpty()) {
+    throw new RuntimeException("请输入药品名称！"); // 抛出错误：输入为空
+  }
+  // 第二步：让“仓库管理员”（Dao）去数据库找药品
+  List<Medicine> list = checkItemDao.selectMedByName(mname);
+  // 第三步：检查数据库是否找到结果
+  if (list == null || list.size() == 0) {
+    throw new RuntimeException("无此相关的药品！"); // 抛出错误：没找到
+  }
+  return list; // 把找到的药品列表返回给Controller
+}
+
+作用：
+
+做 “业务检查”：比如用户没输入内容就搜索？直接报错 “请输入药品名称”。
+调用下一层（Dao）去数据库 “找药品”。
+检查数据库返回的结果：如果没找到，就报错 “无此药品”。
+3. 第三层：Dao（仓库管理员）—— 去数据库查数据
+对应代码：MedicineDao接口 + MyBatis 的 XML 配置文件
+
+java
+// MedicineDao接口（定义要做什么）
+public interface MedicineDao {
+  List<Medicine> selectMedByName(String mname); // 声明：要根据名称查药品
+}
+
+xml
+<!-- MyBatis配置文件（告诉Dao怎么查数据库） -->
+<select id="selectMedByName" parameterType="String" resultType="Medicine">
+  select * from medicine where mname = #{mname}
+</select>
+
+作用：
+
+MedicineDao是 “仓库管理员的清单”，声明需要 “根据名称查药品” 这个操作。
+XML 文件里的 SQL 语句是 “具体找货的方法”：去medicine表（数据库的表，相当于 “药品货架”）里，找mname（药品名称）等于用户输入的记录。
+最终从数据库查到符合条件的药品数据（比如名称、价格、图片地址等），返回给 Service。
+补充：ResultMap（打包箱）
+后端所有返回给前端的结果，都会用ResultMap包装，就像一个 “标准快递箱”：
+
+status：布尔值（true/false）—— 告诉前端 “这次请求成功还是失败”。
+list：当成功时，存放找到的药品列表。
+message：当失败时，存放失败原因（比如 “请输入药品名称”）。
+第三阶段：前端接收结果并展示（前端做的事）
+后端把结果返回给前端后，前端需要解析结果并展示到页面上。
+
+对应代码：HTTP 请求的回调函数
+
+typescript
+(err: BusinessError, data: http.HttpResponse) => {
+  if (!err) { // 没有错误，说明后端成功返回结果
+    this.resultMap = JSON.parse(data.result.toString()); // 解析后端返回的ResultMap
+    if (this.resultMap.status) { // 如果成功
+      this.medList = this.resultMap.list; // 把药品列表存到medList
+    } else { // 如果失败
+      this.medList = []; // 清空列表（不展示数据）
+      console.info(this.resultMap.message); // 打印失败原因
+    }
+  }
+}
+
+然后通过ForEach循环遍历medList，把每个药品的信息（图片、名称、价格）展示在页面上：
+
+typescript
+ForEach(this.medList, (med: Medicine) => {
+  Row() {
+    Image(med.mImage) // 药品图片
+    Text("药名" + med.mname) // 药品名称
+    Text("单价" + med.price) // 价格
+    Button("详情") // 跳转详情页
+  }
+})
+
+整个流程总结（一句话版）
+用户在前端输入药品名称→点击搜索→前端发请求给后端的/med/selectMedByName地址→后端 Controller 接收请求→Service 检查输入合法性并调用 Dao→Dao 通过 SQL 查数据库→查到数据后逐层返回给 Controller→Controller 用 ResultMap 包装结果返回前端→前端解析结果→如果成功，用 ForEach 展示药品列表；如果失败，提示错误信息。
+
+这样一步步下来，从用户输入到页面展示，整个流程就通了。核心就是 “前端发请求→后端处理并查数据库→前端展示结果” 的闭环～
